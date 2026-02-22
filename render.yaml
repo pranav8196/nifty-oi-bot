@@ -1,6 +1,7 @@
 services:
   - type: worker
     name: nifty-oi-bot
+    plan: starter  
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "./start.sh"
