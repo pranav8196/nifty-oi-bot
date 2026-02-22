@@ -6,7 +6,14 @@ services:
     startCommand: "./start.sh"
     autoDeploy: true
     envVars:
-      EMAIL_FROM: "pranavwanderer@gmail.com"
-      EMAIL_TO: "chakorlokur75@gmail.com"
-      EMAIL_PASSWORD: "lxyw rqrs vpru cydx"
-      WHATSAPP_ENABLED: "False"
+      - key: EMAIL_FROM
+        value: "pranavwanderer@gmail.com"
+
+      - key: EMAIL_TO
+        value: "chakorolukur75@gmail.com"
+
+      - key: EMAIL_PASSWORD
+        value: "lxyr rgrs vpru cdyx"
+
+      - key: WHATSAPP_ENABLED
+        value: "False"
