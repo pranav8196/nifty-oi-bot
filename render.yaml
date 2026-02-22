@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: nifty-oi-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "./start.sh"
+    autoDeploy: true
+    envVars:
+      EMAIL_FROM: "pranavwanderer@gmail.com"
+      EMAIL_TO: "chakorlokur75@gmail.com"
+      EMAIL_PASSWORD: "lxyw rqrs vpru cydx"
+      WHATSAPP_ENABLED: "False"
