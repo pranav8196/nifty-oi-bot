@@ -1,2 +1,6 @@
 #!/bin/bash
-python3 nifty_oi_monitor.py
+# Start a tiny HTTP server for Render health checks
+python -m http.server $PORT &
+
+# Run your NIFTY OI monitor
+python nifty_oi_monitor.py
