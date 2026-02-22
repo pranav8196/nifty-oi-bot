@@ -1,5 +1,5 @@
 services:
-  - type: web
+  - type: worker
     name: nifty-oi-bot
     plan: free    # <--- FREE TIER (no payment needed)
     env: python
