@@ -14,6 +14,9 @@ try:
 except ImportError:
     TWILIO_AVAILABLE = False
 
+
+print("=== Starting NIFTY OI Monitor ===") 
+
 # ===========================
 # CONFIGURATION
 # ===========================
