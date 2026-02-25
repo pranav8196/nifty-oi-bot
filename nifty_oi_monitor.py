@@ -377,9 +377,12 @@ def percent_change(prev, curr):
 # MAIN ALERT LOGIC
 # ===========================
 
+
 def check_alerts(spot_price, strikes_dict, atm_strike, step):
+    now_ist = datetime.now(IST)
+
     if step is None:
-        print("Cannot determine strike step; aborting this cycle.")
+        print(f"[{now_ist}] Cannot determine strike step; aborting this cycle.")
         return
 
     monitored_strikes = [
@@ -387,14 +390,20 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
         for i in range(-STRIKE_RANGE, STRIKE_RANGE + 1)
     ]
 
+    print(f"[{now_ist}] Monitored strikes this cycle: {monitored_strikes}")
+    print(f"[{now_ist}] Using OI_CHANGE_THRESHOLD_PERCENT={OI_CHANGE_THRESHOLD_PERCENT}, "
+          f"OI_RATIO_THRESHOLD={OI_RATIO_THRESHOLD}")
+
     for strike in monitored_strikes:
         if strike not in strikes_dict:
+            print(f"[{now_ist}] Strike {strike} not present in strikes_dict, skipping.")
             continue
 
         ce_oi = strikes_dict[strike].get("CE", 0)
         pe_oi = strikes_dict[strike].get("PE", 0)
 
         if ce_oi == 0 and pe_oi == 0:
+            print(f"[{now_ist}] Strike {strike}: both CE and PE OI are 0, skipping.")
             continue
 
         # --- Get previous OI from DB ---
@@ -407,9 +416,6 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
         ce_trigger = ce_change_pct is not None and ce_change_pct >= OI_CHANGE_THRESHOLD_PERCENT
         pe_trigger = pe_change_pct is not None and pe_change_pct >= OI_CHANGE_THRESHOLD_PERCENT
 
-        oi_jump_triggered = ce_trigger or pe_trigger
-
-        # --- Call-Put ratio ---
         valid_oi = [x for x in [ce_oi, pe_oi] if x > 0]
         if len(valid_oi) < 2:
             ratio_ok = False
@@ -420,8 +426,18 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
             ratio = larger / smaller
             ratio_ok = ratio >= OI_RATIO_THRESHOLD
 
+        # ----- DEBUG LOG PER STRIKE -----
+        print(f"[{now_ist}] Strike {strike}: "
+              f"CE curr={ce_oi}, prev={ce_prev}, change%={ce_change_pct}, trigger={ce_trigger}; "
+              f"PE curr={pe_oi}, prev={pe_prev}, change%={pe_change_pct}, trigger={pe_trigger}; "
+              f"ratio={ratio}, ratio_ok={ratio_ok}")
+
         # --- Final condition ---
+        oi_jump_triggered = ce_trigger or pe_trigger
+
         if oi_jump_triggered and ratio_ok:
+            print(f"[{now_ist}] 🚨 ALERT CONDITIONS MET for strike {strike}! Building alert...")
+
             if ce_trigger:
                 side = "CE"
                 prev_oi = ce_prev
@@ -434,7 +450,7 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
             larger_side = "CE" if ce_oi >= pe_oi else "PE"
             diff = abs(ce_oi - pe_oi)
 
-            timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             change_str = "INF" if change_pct == inf else f"{change_pct:.2f}%"
             subject = f"[OI ALERT] {SYMBOL} {strike} {side} OI {change_str} | CE:{ce_oi} PE:{pe_oi}"
 
@@ -468,12 +484,18 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
             set_previous_oi(strike, "PE", pe_oi)
 
 
+
+
+
+
 # ===========================
 # MAIN LOOP
 # ===========================
 
 def main_loop():
     print(f"Starting {SYMBOL} OI monitor for ATM +/- {STRIKE_RANGE} strikes...")
+    print(f"Active thresholds: OI_CHANGE_THRESHOLD_PERCENT={OI_CHANGE_THRESHOLD_PERCENT},"
+          f"OI_RATIO_THRESHOLD={OI_RATIO_THRESHOLD}")
     init_db()
 
     while True:
