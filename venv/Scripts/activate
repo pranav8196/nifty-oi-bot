@@ -35,7 +35,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\prana\OneDrive\Desktop\NIftyScript\venv"
+VIRTUAL_ENV="C:\Users\Pranav Deshpande\OneDrive - Nallas\Desktop\NiftyOI\nifty-oi-bot\venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

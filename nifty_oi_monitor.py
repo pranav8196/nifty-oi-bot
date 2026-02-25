@@ -5,17 +5,23 @@ from datetime import datetime, time as dtime, timezone, timedelta
 from math import inf
 import sqlite3
 import smtplib
-from email.mime.text import MIMEText
+from email.mime.text import MIMEText   # correct import
 
+# -------------------------------------------------------------------
+# TIMEZONE (IST)
+# -------------------------------------------------------------------
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# -------------------------------------------------------------------
 # Optional: WhatsApp via Twilio
+# -------------------------------------------------------------------
 try:
     from twilio.rest import Client as TwilioClient
     TWILIO_AVAILABLE = True
 except ImportError:
     TWILIO_AVAILABLE = False
 
-
-print("=== Starting NIFTY OI Monitor ===") 
+print("=== Starting NIFTY OI Monitor ===")
 
 # ===========================
 # CONFIGURATION
@@ -35,33 +41,32 @@ EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "True") == "True"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
-# Read these from environment (Render / local .env)
-EMAIL_FROM = os.getenv("EMAIL_FROM", "your_email@gmail.com")          # <-- override via env
-EMAIL_TO = os.getenv("EMAIL_TO", "your_target_email@gmail.com")       # <-- override via env
+EMAIL_FROM = os.getenv("EMAIL_FROM", "your_email@gmail.com")
+EMAIL_TO = os.getenv("EMAIL_TO", "your_target_email@gmail.com")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "YOUR_GMAIL_APP_PASSWORD")
 
 # ---------- WhatsApp Alert Config (Twilio, optional / not free) ----------
-# By default this is DISABLED.
-# To enable WhatsApp alerts:
-# 1. Set env var WHATSAPP_ENABLED="True"
-# 2. Fill in TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, TWILIO_TO with real values.
 WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "False") == "True"
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "your_twilio_sid")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "your_twilio_auth_token")
 TWILIO_FROM = os.getenv("TWILIO_FROM", "whatsapp:+14155238886")       # Twilio sandbox number
 TWILIO_TO = os.getenv("TWILIO_TO", "whatsapp:+91XXXXXXXXXX")          # your WhatsApp number
 
-# NSE Option Chain URL
-NSE_URL = f"https://www.nseindia.com/api/option-chain-indices?symbol={SYMBOL}"
+# Base v3 URL (we will add &expiry=...)
+NSE_BASE_URL = "https://www.nseindia.com/api/option-chain-v3"
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        " AppleWebKit/537.36 (KHTML, like Gecko)"
-        " Chrome/123.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.nseindia.com/option-chain"
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/option-chain",
+    "X-Requested-With": "XMLHttpRequest",
+    "Connection": "keep-alive",
+    "Origin": "https://www.nseindia.com",
 }
 
 session = requests.Session()
@@ -72,28 +77,108 @@ twilio_client = None
 if WHATSAPP_ENABLED and TWILIO_AVAILABLE:
     twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
+# ===========================
+# HARDCODED WEEKLY EXPIRY DATES (NSE FORMAT)
+# ===========================
+
+# These are the dates you gave, converted to 'dd-MMM-YYYY'
+WEEKLY_EXPIRIES = [
+    "02-Mar-2026",
+    "10-Mar-2026",
+    "17-Mar-2026",
+    "24-Mar-2026",
+    "30-Mar-2026",
+    "07-Apr-2026",
+    "13-Apr-2026",
+    "21-Apr-2026",
+    "28-Apr-2026",
+    "05-May-2026",
+    "12-May-2026",
+    "19-May-2026",
+    "26-May-2026",
+    "02-Jun-2026",
+    "09-Jun-2026",
+    "16-Jun-2026",
+    "23-Jun-2026",
+    "30-Jun-2026",
+    "07-Jul-2026",
+    "14-Jul-2026",
+    "21-Jul-2026",
+    "28-Jul-2026",
+    "04-Aug-2026",
+    "11-Aug-2026",
+    "18-Aug-2026",
+    "25-Aug-2026",
+    "01-Sep-2026",
+    "08-Sep-2026",
+    "15-Sep-2026",
+    "22-Sep-2026",
+    "29-Sep-2026",
+    "06-Oct-2026",
+    "13-Oct-2026",
+    "19-Oct-2026",
+    "27-Oct-2026",
+    "03-Nov-2026",
+    "09-Nov-2026",
+    "17-Nov-2026",
+    "23-Nov-2026",
+    "01-Dec-2026",
+    "08-Dec-2026",
+    "15-Dec-2026",
+    "22-Dec-2026",
+    "29-Dec-2026",
+]
+
+
+def get_current_weekly_expiry_from_list(now_ist: datetime) -> str:
+    """
+    Use the hardcoded WEEKLY_EXPIRIES list to choose the
+    next expiry on or after today's date (IST).
+
+    If today is before the first date -> pick the first.
+    If today is after the last date  -> pick the last.
+    """
+    today = now_ist.date()
+
+    chosen = None
+    for exp_str in WEEKLY_EXPIRIES:
+        try:
+            exp_date = datetime.strptime(exp_str, "%d-%b-%Y").date()
+        except Exception:
+            continue
+
+        if exp_date >= today:
+            chosen = exp_str
+            break
+
+    if chosen is None:
+        # After last known expiry, fallback to last
+        chosen = WEEKLY_EXPIRIES[-1]
+
+    print(f"[{now_ist}] Using weekly expiry from list: {chosen}")
+    return chosen
+
 
 # ===========================
 # MARKET HOURS (IST) CHECK
 # ===========================
 
-def is_market_hours_ist():
+def is_market_hours_ist() -> bool:
     """
     Return True only during NSE regular trading hours:
     Monday–Friday, 09:15–15:30 IST
     """
-    now_utc = datetime.now(timezone.utc)
-    now_ist = now_utc + timedelta(hours=5, minutes=30)
-
+    now_ist = datetime.now(IST)
     weekday = now_ist.weekday()  # 0 = Monday, 6 = Sunday
-    if weekday > 4:              # 5 = Saturday, 6 = Sunday
+
+    # Weekend check
+    if weekday >= 5:  # 5 = Saturday, 6 = Sunday
         return False
 
-    t = now_ist.time()
-    start = dtime(9, 15)
-    end = dtime(15, 30)
+    market_open = dtime(9, 15)
+    market_close = dtime(15, 30)
 
-    return start <= t <= end
+    return market_open <= now_ist.time() <= market_close
 
 
 # ===========================
@@ -160,16 +245,12 @@ def send_email(subject, message):
             server.login(EMAIL_FROM, EMAIL_PASSWORD)
             server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
 
-        print(f"[{datetime.now()}] Email alert sent.")
+        print(f"[{datetime.now(IST)}] Email alert sent.")
     except Exception as e:
-        print(f"[{datetime.now()}] Error sending email: {e}")
+        print(f"[{datetime.now(IST)}] Error sending email: {e}")
 
 
 def send_whatsapp(message):
-    # Will only fire if:
-    # - WHATSAPP_ENABLED is True
-    # - twilio is installed
-    # - twilio_client is initialized with valid credentials
     if not WHATSAPP_ENABLED or not TWILIO_AVAILABLE or twilio_client is None:
         return
 
@@ -179,9 +260,9 @@ def send_whatsapp(message):
             from_=TWILIO_FROM,
             to=TWILIO_TO
         )
-        print(f"[{datetime.now()}] WhatsApp alert sent.")
+        print(f"[{datetime.now(IST)}] WhatsApp alert sent.")
     except Exception as e:
-        print(f"[{datetime.now()}] Error sending WhatsApp: {e}")
+        print(f"[{datetime.now(IST)}] Error sending WhatsApp: {e}")
 
 
 def notify_alert(alert_text, email_subject):
@@ -191,43 +272,60 @@ def notify_alert(alert_text, email_subject):
 
 
 # ===========================
-# NSE FUNCTIONS
+# NSE FUNCTIONS (v3 with expiry param)
 # ===========================
 
-def fetch_option_chain():
-    try:
-        # If you get 403 from NSE, you can optionally warm up:
-        # session.get("https://www.nseindia.com", timeout=5)
+def fetch_option_chain(now_ist: datetime) -> dict | None:
+    """
+    Fetch option chain only for the weekly expiry chosen from WEEKLY_EXPIRIES.
+    """
+    expiry_str = get_current_weekly_expiry_from_list(now_ist)
+    print(f"[{now_ist}] Fetching option chain from NSE for {SYMBOL}, expiry {expiry_str}...")
 
-        resp = session.get(NSE_URL, timeout=10)
+    url = f"{NSE_BASE_URL}?type=Indices&symbol={SYMBOL}&expiry={expiry_str}"
+
+    try:
+        # Warmup to set cookies (may give 403, that's okay)
+        warmup = session.get("https://www.nseindia.com", timeout=5)
+        print(f"[{now_ist}] Warmup status: {warmup.status_code}")
+
+        resp = session.get(url, timeout=10)
+        print(f"[{now_ist}] NSE response status: {resp.status_code}")
         resp.raise_for_status()
-        return resp.json()
+
+        try:
+            data = resp.json()
+        except Exception:
+            print(f"[{now_ist}] JSON decode failed. Raw response (first 500 chars):")
+            print(resp.text[:500])
+            return None
+
+        if not isinstance(data, dict) or len(data.keys()) == 0:
+            print(f"[{now_ist}] NSE returned empty JSON for expiry {expiry_str}.")
+            return None
+
+        keys = list(data.keys())
+        print(f"[{now_ist}] Top-level JSON keys: {keys}")
+        records = data.get("records", {})
+        if isinstance(records, dict):
+            all_data = records.get("data", [])
+            print(f"[{now_ist}] records.data length (for {expiry_str}): {len(all_data)}")
+
+        return data
+
     except Exception as e:
-        print(f"[{datetime.now()}] Error fetching option chain: {e}")
+        print(f"[{now_ist}] Error fetching option chain: {e}")
         return None
 
 
-def get_spot_price_and_step(data):
-    records = data.get("records", {})
-    underlying = records.get("underlyingValue", None)
-    strike_prices = [item.get("strikePrice") for item in records.get("data", []) if "strikePrice" in item]
-
-    step = None
-    if len(strike_prices) >= 2:
-        strike_prices = sorted(set(strike_prices))
-        diffs = [j - i for i, j in zip(strike_prices[:-1], strike_prices[1:])]
-        step = min(diffs) if diffs else None
-
-    return underlying, step
-
-
-def build_strike_map(data):
+def build_strike_map(data: dict) -> dict:
     """
     Returns dict: strikes[strike] = {"CE": ce_oi, "PE": pe_oi}
+    v3 response is already for a single expiry (we filtered via URL).
     """
     records = data.get("records", {})
     all_data = records.get("data", [])
-    strikes = {}
+    strikes: dict[int, dict[str, int]] = {}
 
     for item in all_data:
         strike = item.get("strikePrice")
@@ -247,6 +345,20 @@ def build_strike_map(data):
                 strikes[strike]["PE"] = pe_oi
 
     return strikes
+
+
+def get_spot_price_and_step(data: dict):
+    records = data.get("records", {})
+    underlying = records.get("underlyingValue", None)
+    strike_prices = [item.get("strikePrice") for item in records.get("data", []) if "strikePrice" in item]
+
+    step = None
+    if len(strike_prices) >= 2:
+        strike_prices = sorted(set(strike_prices))
+        diffs = [j - i for i, j in zip(strike_prices[:-1], strike_prices[1:])]
+        step = min(diffs) if diffs else None
+
+    return underlying, step
 
 
 def find_atm_strike(spot_price, strike_prices):
@@ -322,8 +434,7 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
             larger_side = "CE" if ce_oi >= pe_oi else "PE"
             diff = abs(ce_oi - pe_oi)
 
-            # Build alert text with all info you wanted
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             change_str = "INF" if change_pct == inf else f"{change_pct:.2f}%"
             subject = f"[OI ALERT] {SYMBOL} {strike} {side} OI {change_str} | CE:{ce_oi} PE:{pe_oi}"
 
@@ -357,40 +468,49 @@ def check_alerts(spot_price, strikes_dict, atm_strike, step):
             set_previous_oi(strike, "PE", pe_oi)
 
 
+# ===========================
+# MAIN LOOP
+# ===========================
+
 def main_loop():
     print(f"Starting {SYMBOL} OI monitor for ATM +/- {STRIKE_RANGE} strikes...")
     init_db()
 
     while True:
-        # Skip everything outside NSE market hours (IST)
+        now_ist = datetime.now(IST)
+
         if not is_market_hours_ist():
-            print(f"[{datetime.now()}] Outside market hours (IST), sleeping...")
+            print(f"[{now_ist}] Outside market hours (IST), sleeping for {POLL_INTERVAL_SECONDS}s...")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        data = fetch_option_chain()
-        if not data:
+        print(f"[{now_ist}] Inside market hours (IST). Starting new cycle...")
+
+        data = fetch_option_chain(now_ist)
+        if data is None:
+            print(f"[{now_ist}] No data from NSE (fetch_option_chain returned None). Sleeping...")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         spot_price, step = get_spot_price_and_step(data)
-        if spot_price is None:
-            print("Could not fetch spot price.")
+        if spot_price is None or step is None:
+            print(f"[{now_ist}] Could not determine spot price or strike step. Sleeping...")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         strikes_dict = build_strike_map(data)
         all_strikes = sorted(strikes_dict.keys())
         if not all_strikes:
-            print("No strikes in option chain data.")
+            print(f"[{now_ist}] No strikes in option chain data. Sleeping...")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         atm_strike = find_atm_strike(spot_price, all_strikes)
-        print(f"[{datetime.now()}] Spot: {spot_price}, ATM: {atm_strike}, Step: {step}")
+        print(f"[{now_ist}] Spot: {spot_price}, ATM: {atm_strike}, Step: {step}")
 
         check_alerts(spot_price, strikes_dict, atm_strike, step)
 
+        print(f"[{now_ist}] Cycle complete. Sleeping for {POLL_INTERVAL_SECONDS}s...\n")
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
