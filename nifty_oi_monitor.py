@@ -509,6 +509,7 @@ def compute_change_vs_baseline(base_oi: int | None, curr_oi: int | None):
 # MAIN ALERT LOGIC
 # ===========================
 
+
 def check_alerts(
     spot_price,
     current_strikes: dict,
@@ -519,6 +520,13 @@ def check_alerts(
     trading_date: str,
     expiry_str: str,
 ):
+    LOT_SIZE = 65  # <-- NEW LOT SIZE CONSTANT
+
+    def oi_to_lakhs(oi):
+        lots = oi * LOT_SIZE
+        lakhs = lots / 100000
+        return lots, f"{lakhs:.2f} lakh"
+
     if step is None:
         print(f"[{now_ist}] Cannot determine strike step; aborting this cycle.")
         return
@@ -545,8 +553,8 @@ def check_alerts(
 
         ce_curr = curr.get("CE", 0)
         pe_curr = curr.get("PE", 0)
-        ce_base = base.get("CE")
-        pe_base = base.get("PE")
+        ce_base = base.get("CE", 0)
+        pe_base = base.get("PE", 0)
 
         if ce_curr == 0 and pe_curr == 0:
             print(f"[{now_ist}] Strike {strike}: both CE and PE OI are 0 currently, skipping.")
@@ -580,37 +588,33 @@ def check_alerts(
 
         # --- Final condition ---
         oi_jump_triggered = ce_trigger or pe_trigger
-
+        
         if oi_jump_triggered and ratio_ok:
             print(f"[{now_ist}] 🚨 ALERT CONDITIONS MET for strike {strike}! Building alert...")
 
-            # Decide which side triggered (CE or PE)
+            
+            #Determine which actually triggered the alert
             if ce_trigger:
-                side = "CE"
-                base_oi = ce_base
-                curr_oi = ce_curr
-                change_pct = ce_change_pct
-                diff = ce_diff
-                direction = ce_dir
+                trigger_side = "CE"
+            elif pe_trigger:
+                trigger_side = "PE"
             else:
-                side = "PE"
-                base_oi = pe_base
-                curr_oi = pe_curr
-                change_pct = pe_change_pct
-                diff = pe_diff
-                direction = pe_dir
+                trigger_side = "Unknown"
 
-            larger_side = "CE" if ce_curr >= pe_curr else "PE"
-            diff_ce_pe = abs(ce_curr - pe_curr)
+        
+            
+            
+            
+            # Always show BOTH CE and PE details
+            ce_lots, ce_lakhs = oi_to_lakhs(ce_curr)
+            pe_lots, pe_lakhs = oi_to_lakhs(pe_curr)
+            ce_base_lots, ce_base_lakhs = oi_to_lakhs(ce_base)
+            pe_base_lots, pe_base_lakhs = oi_to_lakhs(pe_base)
+
+            diff_lots = (ce_curr - pe_curr) * LOT_SIZE
+            diff_lakhs = diff_lots / 100000
 
             timestamp = now_ist.strftime("%Y-%m-%d %H:%M:%S")
-            change_str = "INF" if change_pct == inf else f"{change_pct:.2f}%"
-            direction_str = direction or "UNKNOWN"
-
-            subject = (
-                f"[OI ALERT] {SYMBOL} {strike} {side} OI {change_str} ({direction_str}) "
-                f"| CE:{ce_curr} PE:{pe_curr}"
-            )
 
             alert_lines = [
                 "=" * 90,
@@ -621,27 +625,37 @@ def check_alerts(
                 f"SPOT              : {spot_price}",
                 f"ATM STRIKE        : {atm_strike}",
                 f"STRIKE            : {strike}",
+                f"LOT SIZE          : {LOT_SIZE}",
                 "",
-                f"BASELINE {side} OI: {base_oi:,} (first snapshot after 09:17 IST)",
-                f"CURRENT  {side} OI: {curr_oi:,}",
-                f"{side} ΔOI        : {diff:,} ({direction_str})",
-                f"{side} |ΔOI%| vs baseline: {change_str}",
+                f"📌 ALERT TRIGGERED BY: {trigger_side} SIDE ",
                 "",
-                f"CURRENT CE OI     : {ce_curr:,}",
-                f"CURRENT PE OI     : {pe_curr:,}",
-                f"CE-PE ABS DIFF    : {diff_ce_pe:,}",
-                f"CE vs PE RATIO    : {larger_side} ~ {ratio:.2f}x the other side"
-                if ratio is not None
-                else "CE vs PE RATIO    : N/A",
+                # --- CE DETAILS ---
+                f"BASELINE CE OI    : {ce_base:,} → {ce_base_lots:,} ({ce_base_lakhs})",
+                f"CURRENT  CE OI    : {ce_curr:,} → {ce_lots:,} ({ce_lakhs})",
+                f"CE ΔOI            : {ce_diff:,} ({ce_dir})",
+                f"CE |ΔOI%| vs baseline: {ce_change_pct:.2f}%",
                 "",
-                f"THRESHOLDS        : |ΔOI%| ≥ {OI_CHANGE_THRESHOLD_PERCENT} "
-                f"AND CE/PE ratio ≥ {OI_RATIO_THRESHOLD}",
+                # --- PE DETAILS ---
+                f"BASELINE PE OI    : {pe_base:,} → {pe_base_lots:,} ({pe_base_lakhs})",
+                f"CURRENT  PE OI    : {pe_curr:,} → {pe_lots:,} ({pe_lakhs})",
+                f"PE ΔOI            : {pe_diff:,} ({pe_dir})",
+                f"PE |ΔOI%| vs baseline: {pe_change_pct:.2f}%",
+                "",
+                # --- DIFF & RATIO ---
+                f"CE-PE ABS DIFF    : {abs(ce_curr - pe_curr):,} → {abs(diff_lots):,} ({abs(diff_lakhs):.2f} lakh)",
+                f"CE vs PE RATIO    : {'CE' if ce_curr >= pe_curr else 'PE'} ~ {ratio:.2f}x the other side",
+                "",
+                f"THRESHOLDS        : |ΔOI%| ≥ {OI_CHANGE_THRESHOLD_PERCENT} AND CE/PE ratio ≥ {OI_RATIO_THRESHOLD}",
                 "=" * 90,
                 "",
             ]
 
             alert_text = "\n".join(alert_lines)
-            notify_alert(alert_text, subject)
+            notify_alert(alert_text, "OI ALERT")
+
+
+
+
 
 
 # ===========================
