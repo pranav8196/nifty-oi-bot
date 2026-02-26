@@ -5,7 +5,7 @@ from datetime import datetime, time as dtime, timezone, timedelta
 from math import inf
 import sqlite3
 import smtplib
-from email.mime_text import MIMEText  # correct import
+from email.mime.text import MIMEText  # correct import
 
 # -------------------------------------------------------------------
 # TIMEZONE (IST)
