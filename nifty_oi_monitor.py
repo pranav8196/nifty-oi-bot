@@ -55,6 +55,11 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "your_twilio_auth_token")
 TWILIO_FROM = os.getenv("TWILIO_FROM", "whatsapp:+14155238886")       # Twilio sandbox number
 TWILIO_TO = os.getenv("TWILIO_TO", "whatsapp:+91XXXXXXXXXX")          # your WhatsApp number
 
+
+# ---------- Telegram Alert Config ----------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")        # Bot token from BotFather
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")    # Your user/group/chat ID
+
 # Base v3 URL (we will add &expiry=...)
 NSE_BASE_URL = "https://www.nseindia.com/api/option-chain-v3"
 
@@ -353,6 +358,35 @@ def notify_alert(alert_text, email_subject):
     print(alert_text)          # Console
     send_email(email_subject, alert_text)
     send_whatsapp(alert_text)
+    send_telegram(alert_text)
+
+
+
+def send_telegram(message: str):
+    """
+    Send alert message to Telegram using a bot.
+    Requires TELEGRAM_TOKEN and TELEGRAM_CHAT_ID env vars.
+    """
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"[{datetime.now(IST)}] Telegram not configured "
+              f"(missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID).")
+        return
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"  # or remove if you don't want formatting
+        }
+
+        resp = requests.post(url, json=payload, timeout=5)
+        print(f"[{datetime.now(IST)}] Telegram send status: {resp.status_code}")
+        # Optional: uncomment to debug response body
+        # print(resp.text[:300])
+
+    except Exception as e:
+        print(f"[{datetime.now(IST)}] Error sending Telegram message: {e}")
 
 
 # ===========================
