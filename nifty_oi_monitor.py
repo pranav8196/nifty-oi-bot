@@ -17,10 +17,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai = None
 if GEMINI_API_KEY:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
+        from google import genai
+        genai = genai.Client(api_key=GEMINI_API_KEY)
     except ImportError:
-        print("GEMINI_API_KEY set but google-generativeai package not installed.")
+        print("GEMINI_API_KEY set but google-genai package not installed.")
         genai = None
 
 print("=== Starting NIFTY OI Monitor (Baseline vs 09:17 Snapshot) ===")
@@ -324,8 +324,10 @@ def send_llm_analysis(alert_text: str):
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(f"{system_prompt}\n\nAlert:\n{alert_text}")
+        response = genai.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=f"{system_prompt}\n\nAlert:\n{alert_text}",
+        )
         send_telegram(f"*Gemini Analysis:*\n{response.text.strip()}")
         print(f"[{datetime.now(IST)}] Gemini analysis sent to Telegram.")
     except Exception as e:
