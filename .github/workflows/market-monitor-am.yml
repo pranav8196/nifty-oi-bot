@@ -1,0 +1,58 @@
+name: NIFTY OI Monitor - AM Session
+
+on:
+  schedule:
+    # 9:05 AM IST = 3:35 UTC, Mon-Fri
+    - cron: "35 3 * * 1-5"
+  workflow_dispatch:  # Allow manual runs for testing
+
+jobs:
+  monitor-am:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240  # 4 hours max
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set today's IST date for cache key
+        run: |
+          echo "TODAY_DATE=$(TZ='Asia/Kolkata' date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: Restore OI baseline DB from cache (if PM session ran earlier)
+        uses: actions/cache@v4
+        with:
+          path: oi_history.db
+          key: oi-baseline-${{ env.TODAY_DATE }}
+          restore-keys: oi-baseline-
+
+      - name: Run AM monitor session (9:05 AM - ~1:05 PM IST)
+        env:
+          # --- Secrets (set in GitHub repo Settings → Secrets and variables → Secrets) ---
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # --- Config variables (set in GitHub repo Settings → Secrets and variables → Variables) ---
+          # If a variable is not set, the code falls back to its default value (shown in brackets)
+          OI_CHANGE_THRESHOLD_PERCENT: ${{ vars.OI_CHANGE_THRESHOLD_PERCENT }}  # default: 400.0
+          OI_RATIO_THRESHOLD: ${{ vars.OI_RATIO_THRESHOLD }}                    # default: 2.0
+          STRIKE_RANGE: ${{ vars.STRIKE_RANGE }}                                # default: 6
+          LOT_SIZE: ${{ vars.LOT_SIZE }}                                        # default: 65
+          POLL_INTERVAL_SECONDS: ${{ vars.POLL_INTERVAL_SECONDS || '60' }}
+        run: |
+          # Run monitor for up to 240 minutes (stops at market close via is_market_hours_ist)
+          timeout 14400 python -u nifty_oi_monitor.py || true
+
+      - name: Save OI baseline DB to cache (so PM session can use it)
+        uses: actions/cache@v4
+        with:
+          path: oi_history.db
+          key: oi-baseline-${{ env.TODAY_DATE }}
