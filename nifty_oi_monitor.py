@@ -81,29 +81,31 @@ session.headers.update(HEADERS)
 # NIFTY expires every Tuesday (Monday if Tuesday is a market holiday).
 # Update this list when it runs out or NSE changes the schedule.
 #
-# WEEKLY_EXPIRIES = [
-#     "10-Mar-2026", "17-Mar-2026", "24-Mar-2026", "30-Mar-2026",
-#     "07-Apr-2026", "13-Apr-2026", "21-Apr-2026", "28-Apr-2026",
-#     "05-May-2026", "12-May-2026", "19-May-2026", "26-May-2026",
-#     "02-Jun-2026", "09-Jun-2026", "16-Jun-2026", "23-Jun-2026",
-#     "30-Jun-2026", "07-Jul-2026", "14-Jul-2026", "21-Jul-2026",
-#     "28-Jul-2026", "04-Aug-2026", "11-Aug-2026", "18-Aug-2026",
-#     "25-Aug-2026", "01-Sep-2026", "08-Sep-2026", "15-Sep-2026",
-#     "22-Sep-2026", "29-Sep-2026", "06-Oct-2026", "13-Oct-2026",
-#     "19-Oct-2026", "27-Oct-2026", "03-Nov-2026", "09-Nov-2026",
-#     "17-Nov-2026", "23-Nov-2026", "01-Dec-2026", "08-Dec-2026",
-#     "15-Dec-2026", "22-Dec-2026", "29-Dec-2026",
-# ]
-#
-# def get_current_weekly_expiry_from_list(now_ist: datetime) -> str | None:
-#     today = now_ist.date()
-#     for exp_str in WEEKLY_EXPIRIES:
-#         try:
-#             if datetime.strptime(exp_str, "%d-%b-%Y").date() >= today:
-#                 return exp_str
-#         except Exception:
-#             continue
-#     return WEEKLY_EXPIRIES[-1]
+WEEKLY_EXPIRIES = [
+    "10-Mar-2026", "17-Mar-2026", "24-Mar-2026", "30-Mar-2026",
+    "07-Apr-2026", "13-Apr-2026", "21-Apr-2026", "28-Apr-2026",
+    "05-May-2026", "12-May-2026", "19-May-2026", "26-May-2026",
+    "02-Jun-2026", "09-Jun-2026", "16-Jun-2026", "23-Jun-2026",
+    "30-Jun-2026", "07-Jul-2026", "14-Jul-2026", "21-Jul-2026",
+    "28-Jul-2026", "04-Aug-2026", "11-Aug-2026", "18-Aug-2026",
+    "25-Aug-2026", "01-Sep-2026", "08-Sep-2026", "15-Sep-2026",
+    "22-Sep-2026", "29-Sep-2026", "06-Oct-2026", "13-Oct-2026",
+    "19-Oct-2026", "27-Oct-2026", "03-Nov-2026", "09-Nov-2026",
+    "17-Nov-2026", "23-Nov-2026", "01-Dec-2026", "08-Dec-2026",
+    "15-Dec-2026", "22-Dec-2026", "29-Dec-2026",
+]
+
+
+def get_current_weekly_expiry_from_list(now_ist: datetime) -> str | None:
+    """Hardcoded fallback — used when NSE API returns no expiry dates."""
+    today = now_ist.date()
+    for exp_str in WEEKLY_EXPIRIES:
+        try:
+            if datetime.strptime(exp_str, "%d-%b-%Y").date() >= today:
+                return exp_str
+        except Exception:
+            continue
+    return WEEKLY_EXPIRIES[-1]
 
 # Module-level cache: expiry is determined once per trading day per process
 _cached_expiry: str | None = None
@@ -166,10 +168,13 @@ def get_current_expiry(now_ist: datetime) -> str | None:
     expiry_dates = fetch_expiry_dates_from_nse(now_ist)
 
     if not expiry_dates:
-        # If this keeps failing, uncomment the hardcoded list above and
-        # switch the main_loop call to get_current_weekly_expiry_from_list().
-        print(f"[{now_ist}] Could not determine expiry from NSE. Will retry next cycle.")
-        return None
+        # NSE returned nothing (market closed or API issue) — use hardcoded list as fallback
+        fallback = get_current_weekly_expiry_from_list(now_ist)
+        if fallback:
+            print(f"[{now_ist}] NSE returned no expiry dates. Using hardcoded fallback: {fallback}")
+            _cached_expiry = fallback
+            _cached_expiry_date = today
+        return fallback
 
     chosen = pick_next_expiry(expiry_dates, now_ist)
     if chosen:
