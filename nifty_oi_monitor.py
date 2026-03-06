@@ -620,8 +620,12 @@ def main_loop():
     print(f"Thresholds: OI change >={OI_CHANGE_THRESHOLD_PERCENT}% AND CE/PE ratio >={OI_RATIO_THRESHOLD}x")
     init_db()
 
-    # Startup notification — lets you know the bot session is live
+    # Detect expiry at startup so it appears in the startup message and logs
     now_ist = datetime.now(IST)
+    startup_expiry = get_current_expiry(now_ist)
+    expiry_line = f"Expiry   : {startup_expiry}" if startup_expiry else "Expiry   : could not detect from NSE (will retry at market open)"
+
+    # Startup notification — lets you know the bot session is live
     send_telegram(
         f"*NIFTY OI Monitor Started*\n"
         f"Time     : {now_ist.strftime('%Y-%m-%d %H:%M:%S')} IST\n"
@@ -629,7 +633,7 @@ def main_loop():
         f"Poll     : every {POLL_INTERVAL_SECONDS}s\n"
         f"Strikes  : ATM +/- {STRIKE_RANGE}\n"
         f"Alert when: OI change >={OI_CHANGE_THRESHOLD_PERCENT:.0f}% AND ratio >={OI_RATIO_THRESHOLD}x\n"
-        f"Expiry   : determined from NSE on first market cycle\n"
+        f"{expiry_line}\n"
         f"Baseline : will be captured at 09:17 IST (or first fetch after that)"
     )
 
