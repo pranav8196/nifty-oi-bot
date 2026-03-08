@@ -1,4 +1,26 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # NIFTY OI Monitor — Project Reference
+
+## Running Locally
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the monitor (requires TELEGRAM_TOKEN and TELEGRAM_CHAT_ID env vars)
+python nifty_oi_monitor.py
+
+# Debug expiry detection against live NSE API
+python test_expiry_helper.py
+
+```
+
+`test_expiry_helper.py` is a standalone debug script — it calls NSE live and prints which expiry would be chosen. No env vars needed.
+
+---
 
 ## Overview
 Monitors NIFTY options Open Interest (OI) on NSE. Captures a baseline snapshot at 9:17 AM IST each trading day, then every 60 seconds compares live OI against that baseline and fires Telegram alerts when thresholds are breached.
@@ -15,7 +37,7 @@ NIFTY has weekly expiries every **Tuesday** (Monday if Tuesday is a market holid
 
 **Dynamic detection (primary):** The script calls the NSE option chain API without an expiry parameter to fetch `records.expiryDates` — a live list of upcoming expiry dates. It then picks the first date >= today. This happens once per trading day and the result is cached for the session.
 
-**Hardcoded fallback (commented out):** `WEEKLY_EXPIRIES` list in `nifty_oi_monitor.py` (lines ~68–95). To use it: uncomment the list and the function, then change the `get_current_expiry()` call in `main_loop()` to `get_current_weekly_expiry_from_list()`.
+**Hardcoded fallback:** `WEEKLY_EXPIRIES` list and `get_current_weekly_expiry_from_list()` exist in `nifty_oi_monitor.py` (lines ~111–135). The dynamic path already calls this as a fallback when NSE returns no dates. To force it as primary: change the `get_current_expiry()` call in `main_loop()` to `get_current_weekly_expiry_from_list(now_ist)`.
 
 **Why the logic is correct:**
 - On expiry day (Tuesday): `exp_date >= today` picks that day's expiry → monitors it until market close ✓
@@ -29,11 +51,10 @@ NIFTY has weekly expiries every **Tuesday** (Monday if Tuesday is a market holid
 | File | Role |
 |------|------|
 | `nifty_oi_monitor.py` | Main monitoring script — all logic lives here |
-| `streamlit_app.py` | Streamlit dashboard — fetches NSE live, shows OI table |
 | `render.yaml` | Render deployment config (legacy; primary deployment is GitHub Actions) |
 | `start.sh` | Startup script for Render |
-| `requirements.txt` | Python deps: `requests`, `google-generativeai` |
-| `oi_history.db` | SQLite DB — ephemeral; persisted between GitHub Actions sessions via cache |
+| `requirements.txt` | Python deps: `requests`, `google-genai` |
+| `oi_history.db` | SQLite DB — two tables: `baseline_oi` (9:17 AM snapshot) and `alert_log` (fired alerts); persisted between AM/PM sessions via GitHub Actions cache |
 | `.github/workflows/market-monitor-am.yml` | AM session: 9:05 AM – ~1:05 PM IST |
 | `.github/workflows/market-monitor-pm.yml` | PM session: 12:50 PM – ~3:35 PM IST |
 
@@ -83,13 +104,15 @@ Two overlapping workflows cover full market hours (GitHub Actions max job runtim
 
 ## Strategy Logic
 
-1. Script starts; waits for market open (9:15 AM IST, Mon–Fri)
-2. Polls NSE every 60 seconds
-3. On first cycle: fetches available expiry dates from NSE API, picks active expiry
-4. At 9:17 AM IST: captures baseline OI snapshot for all strikes → stored in SQLite
-5. Each subsequent poll: compares current OI vs baseline for ATM ± 6 strikes
-6. If both thresholds breached for any strike → Telegram alert + optional Gemini analysis
-7. Baseline is locked for the day (re-captured only if DB is fresh/empty, e.g. new session)
+1. Script starts → checks if today is a market holiday → exits with Telegram notification if so
+2. Sends startup Telegram ping (suppressed if baseline already exists — i.e. PM session or mid-day restart)
+3. Waits for market open (9:15 AM IST); polls NSE every 60 seconds
+4. On first cycle: fetches available expiry dates from NSE API, picks active expiry
+5. At 9:17 AM IST: captures baseline OI snapshot for **all strikes** → stored in `baseline_oi` table; sends rich Telegram message (spot, ATM, top 3 CE/PE strikes, PCR)
+6. Each subsequent poll: compares current OI vs baseline for ATM ± 6 strikes (range shifts with ATM throughout the day)
+7. If both thresholds breached for any strike → dedup check → Telegram alert + optional Gemini analysis; alert logged to `alert_log` table
+8. At 3:33 PM IST: sends session close summary (final spot/ATM/PCR + all alerts from the day)
+9. Baseline is locked for the day (re-captured only if DB is fresh/empty)
 
 ---
 
@@ -98,7 +121,7 @@ Two overlapping workflows cover full market hours (GitHub Actions max job runtim
 ```
 NSE data fetched → thresholds checked → notify_alert()
                                               ├── send_telegram()       # main alert
-                                              └── send_llm_analysis()   # Gemini follow-up (optional)
+                                              └── send_llm_analysis()   # Gemini follow-up (optional, model: gemini-2.0-flash)
 ```
 
 ---
@@ -111,9 +134,31 @@ NSE data fetched → thresholds checked → notify_alert()
 - No code change needed
 
 ### Hardcoded Expiry Fallback
-- Commented-out `WEEKLY_EXPIRIES` list in `nifty_oi_monitor.py`
-- Only needed if NSE API stops returning `expiryDates` or returns wrong dates
-- Currently listed through Dec 2026 — add more if fallback is ever activated
+- `WEEKLY_EXPIRIES` list in `nifty_oi_monitor.py` (~line 111); already used automatically when NSE returns empty dates
+- To force as primary: swap the call in `main_loop()` to `get_current_weekly_expiry_from_list(now_ist)`
+- Currently listed through Dec 2026 — extend when needed
+
+### Alert Deduplication
+- Alerts fire once per breach per (strike, side) per session
+- Suppressed while conditions stay breached; re-fires if conditions clear then breach again
+- State: in-memory `_alert_active` dict — resets automatically on new trading day or session
+- AM and PM GitHub Actions jobs each start with fresh dedup state (by design)
+
+### PCR in Alerts
+- Each alert includes PCR = total PE OI / total CE OI across ATM ± 6 strikes only
+- PCR < 1 = more calls (bullish lean); PCR > 1 = more puts (bearish lean)
+
+### Market Holidays
+- `MARKET_HOLIDAYS` dict in `nifty_oi_monitor.py` (~line 49) — keyed by `YYYY-MM-DD`
+- Source: NSE website equity holiday list for the year
+- Script exits early on holidays: sends one Telegram notification, no monitoring
+- `is_market_hours_ist()` also returns `False` on holidays as a secondary guard
+- **Update annually:** add next year's holidays before Dec 31. Current list covers 2026 only.
+
+### Silent Failure Detection
+- Both workflow YAMLs distinguish normal timeout (exit 124) from Python crash (any other non-zero exit)
+- On crash: `if: failure()` step sends `"⚠️ AM/PM session crashed"` Telegram via `curl`
+- AM cache save step has `if: always()` — baseline DB is preserved even if AM crashes mid-session
 
 ---
 
@@ -126,14 +171,8 @@ NSE data fetched → thresholds checked → notify_alert()
 | Expiry shows None | NSE API down at startup | Script sleeps and retries next cycle; or activate hardcoded fallback |
 | Telegram not sending | Missing secrets | Check `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` in GitHub Secrets |
 | `INF` in alert text | `base_oi == 0` for a strike | `fmt_pct()` helper handles this safely — no crash |
+| Duplicate alerts flooding Telegram | Same strike breaching every 60s | Fixed: dedup via `_alert_active` in-memory dict |
+| Cron fires on market holiday | GitHub Actions runs Mon–Fri regardless | Fixed: `MARKET_HOLIDAYS` dict in code — script exits early with a Telegram notification |
+| AM crash loses baseline before PM starts | Python exception mid-session | Fixed: AM cache save has `if: always()` — DB saved even on crash |
+| No alert in close summary from AM session | `alert_log` is in-memory only | Fixed: alerts written to `alert_log` SQLite table, persisted via cache to PM session |
 
----
-
-## Frontend (Streamlit)
-
-`streamlit_app.py` — deploy on Streamlit Community Cloud (free):
-1. Connect GitHub repo at streamlit.io/cloud
-2. Set `streamlit_app.py` as main file
-3. Add `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` in Streamlit secrets (if needed)
-
-Note: The Streamlit app fetches NSE data independently and reads `oi_history.db` for the baseline. It won't share the DB with GitHub Actions automatically — best used locally or alongside the monitor on the same machine.
