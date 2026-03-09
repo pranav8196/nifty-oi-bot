@@ -23,7 +23,7 @@ python test_expiry_helper.py
 ---
 
 ## Overview
-Monitors NIFTY options Open Interest (OI) on NSE. Captures a baseline snapshot at 9:17 AM IST each trading day, then every 60 seconds compares live OI against that baseline and fires Telegram alerts when thresholds are breached.
+Monitors NIFTY options Open Interest (OI) on NSE. Captures a baseline snapshot at 9:18 AM IST each trading day, then every 60 seconds compares live OI against that baseline and fires Telegram alerts when thresholds are breached.
 
 **Alert condition (BOTH must be true simultaneously):**
 - `|OI change vs baseline|` >= `OI_CHANGE_THRESHOLD_PERCENT` (default 400%)
@@ -54,9 +54,8 @@ NIFTY has weekly expiries every **Tuesday** (Monday if Tuesday is a market holid
 | `render.yaml` | Render deployment config (legacy; primary deployment is GitHub Actions) |
 | `start.sh` | Startup script for Render |
 | `requirements.txt` | Python deps: `requests`, `google-genai` |
-| `oi_history.db` | SQLite DB — two tables: `baseline_oi` (9:17 AM snapshot) and `alert_log` (fired alerts); persisted between AM/PM sessions via GitHub Actions cache |
-| `.github/workflows/market-monitor-am.yml` | AM session: 9:05 AM – ~1:05 PM IST |
-| `.github/workflows/market-monitor-pm.yml` | PM session: 12:50 PM – ~3:35 PM IST |
+| `oi_history.db` | SQLite DB — two tables: `baseline_oi` (9:18 AM snapshot) and `alert_log` (fired alerts) |
+| `.github/workflows/market-monitor-am.yml` | Single full-day session: 9:13 AM – ~3:10 PM IST |
 
 ---
 
@@ -86,14 +85,13 @@ NIFTY has weekly expiries every **Tuesday** (Monday if Tuesday is a market holid
 
 Public repo → unlimited free GitHub Actions minutes.
 
-Two overlapping workflows cover full market hours (GitHub Actions max job runtime = 6h):
+Single workflow covers full market hours (within GitHub Actions 6h job limit):
 
-| Workflow | Cron (UTC) | IST Window | Duration |
-|----------|------------|------------|----------|
-| AM (`market-monitor-am.yml`) | `35 3 * * 1-5` | 9:05 AM – ~1:05 PM | 4h |
-| PM (`market-monitor-pm.yml`) | `20 7 * * 1-5` | 12:50 PM – ~3:35 PM | ~2h45m |
+| Workflow | Trigger (UTC) | IST Window | Duration |
+|----------|--------------|------------|----------|
+| `market-monitor-am.yml` | `43 3 * * 1-5` via cron-job.org | 9:13 AM – ~3:10 PM | 5h57m |
 
-**Baseline DB persistence:** AM session saves `oi_history.db` to GitHub Actions cache (key = today's IST date). PM session restores it, so the 9:17 AM baseline captured by AM is available to PM.
+No DB cache handoff needed — single session captures baseline and runs to close.
 
 **GitHub Secrets to add** (repo Settings → Secrets and variables → Actions):
 - `TELEGRAM_TOKEN`
@@ -102,16 +100,39 @@ Two overlapping workflows cover full market hours (GitHub Actions max job runtim
 
 ---
 
+## Workflow Trigger: cron-job.org (Backup Scheduler)
+
+GitHub's built-in `schedule:` cron trigger is unreliable — it can be delayed up to 1 hour or silently skipped. To guarantee the workflow fires on time, one cron job on [cron-job.org](https://cron-job.org) (free account: pranav8196) calls the GitHub API via `workflow_dispatch` each market day.
+
+| Job | Schedule (UTC) | IST Time | Triggers |
+|-----|---------------|----------|----------|
+| NIFTY Full Day Session | `43 3 * * 1-5` | 9:13 AM | `market-monitor-am.yml` |
+
+**How the job is configured:**
+- **URL:** `https://api.github.com/repos/pranav8196/nifty-oi-bot/actions/workflows/market-monitor-am.yml/dispatches`
+- **Method:** POST
+- **Headers:**
+  - `Authorization: Bearer <GitHub PAT>`
+  - `Accept: application/vnd.github+json`
+  - `Content-Type: application/json`
+- **Body:** `{"ref":"main"}`
+
+**GitHub PAT requirements:** Fine-grained token, `nifty-oi-bot` repo only, Actions = Read & Write. Expires annually — renew before expiry to avoid silent failures.
+
+**If workflows stop auto-triggering:** Log in to cron-job.org, check job history for failures (likely expired PAT). Regenerate PAT on GitHub → Developer Settings → Fine-grained tokens, update on cron-job.org.
+
+---
+
 ## Strategy Logic
 
 1. Script starts → checks if today is a market holiday → exits with Telegram notification if so
-2. Sends startup Telegram ping (suppressed if baseline already exists — i.e. PM session or mid-day restart)
+2. Sends startup Telegram ping
 3. Waits for market open (9:15 AM IST); polls NSE every 60 seconds
 4. On first cycle: fetches available expiry dates from NSE API, picks active expiry
-5. At 9:17 AM IST: captures baseline OI snapshot for **all strikes** → stored in `baseline_oi` table; sends rich Telegram message (spot, ATM, top 3 CE/PE strikes, PCR)
+5. At 9:18 AM IST: captures baseline OI snapshot for **all strikes** → stored in `baseline_oi` table; sends rich Telegram message (spot, ATM, top 3 CE/PE strikes, PCR)
 6. Each subsequent poll: compares current OI vs baseline for ATM ± 6 strikes (range shifts with ATM throughout the day)
 7. If both thresholds breached for any strike → dedup check → Telegram alert + optional Gemini analysis; alert logged to `alert_log` table
-8. At 3:33 PM IST: sends session close summary (final spot/ATM/PCR + all alerts from the day)
+8. At 3:08 PM IST: sends session close summary (final spot/ATM/PCR + all alerts from the day)
 9. Baseline is locked for the day (re-captured only if DB is fresh/empty)
 
 ---
@@ -141,8 +162,7 @@ NSE data fetched → thresholds checked → notify_alert()
 ### Alert Deduplication
 - Alerts fire once per breach per (strike, side) per session
 - Suppressed while conditions stay breached; re-fires if conditions clear then breach again
-- State: in-memory `_alert_active` dict — resets automatically on new trading day or session
-- AM and PM GitHub Actions jobs each start with fresh dedup state (by design)
+- State: in-memory `_alert_active` dict — resets automatically on new trading day
 
 ### PCR in Alerts
 - Each alert includes PCR = total PE OI / total CE OI across ATM ± 6 strikes only
@@ -156,9 +176,8 @@ NSE data fetched → thresholds checked → notify_alert()
 - **Update annually:** add next year's holidays before Dec 31. Current list covers 2026 only.
 
 ### Silent Failure Detection
-- Both workflow YAMLs distinguish normal timeout (exit 124) from Python crash (any other non-zero exit)
-- On crash: `if: failure()` step sends `"⚠️ AM/PM session crashed"` Telegram via `curl`
-- AM cache save step has `if: always()` — baseline DB is preserved even if AM crashes mid-session
+- Workflow distinguishes normal timeout (exit 124) from Python crash (any other non-zero exit)
+- On crash: `if: failure()` step sends `"⚠️ session crashed"` Telegram via `curl`
 
 ---
 
@@ -166,13 +185,10 @@ NSE data fetched → thresholds checked → notify_alert()
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| Baseline captured late/wrong time | Script restarted mid-day (Render ephemeral FS) | GitHub Actions + cache solves this |
+| Baseline captured late/wrong time | Script restarted mid-day | Single full-day session eliminates this |
 | 403 from NSE | Rate limiting / missing cookies | Retry logic (3 attempts, 5s apart) in `fetch_option_chain` |
 | Expiry shows None | NSE API down at startup | Script sleeps and retries next cycle; or activate hardcoded fallback |
 | Telegram not sending | Missing secrets | Check `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` in GitHub Secrets |
 | `INF` in alert text | `base_oi == 0` for a strike | `fmt_pct()` helper handles this safely — no crash |
 | Duplicate alerts flooding Telegram | Same strike breaching every 60s | Fixed: dedup via `_alert_active` in-memory dict |
 | Cron fires on market holiday | GitHub Actions runs Mon–Fri regardless | Fixed: `MARKET_HOLIDAYS` dict in code — script exits early with a Telegram notification |
-| AM crash loses baseline before PM starts | Python exception mid-session | Fixed: AM cache save has `if: always()` — DB saved even on crash |
-| No alert in close summary from AM session | `alert_log` is in-memory only | Fixed: alerts written to `alert_log` SQLite table, persisted via cache to PM session |
-

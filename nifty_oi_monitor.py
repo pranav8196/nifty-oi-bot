@@ -23,7 +23,7 @@ if GEMINI_API_KEY:
         print("GEMINI_API_KEY set but google-genai package not installed.")
         genai = None
 
-print("=== Starting NIFTY OI Monitor (Baseline vs 09:17 Snapshot) ===")
+print("=== Starting NIFTY OI Monitor (Baseline vs 09:18 Snapshot) ===")
 
 # ===========================
 # CONFIGURATION
@@ -787,13 +787,13 @@ def ensure_baseline_for_today(
         return True, trading_date
 
     t = now_ist.time()
-    if t < dtime(9, 17):
-        print(f"[{now_ist}] Waiting for 09:17 IST to capture baseline (OI settling period)...")
+    if t < dtime(9, 18):
+        print(f"[{now_ist}] Waiting for 09:18 IST to capture baseline (OI settling period)...")
         return False, trading_date
 
-    late = t > dtime(9, 22)
+    late = t > dtime(9, 23)
     if late:
-        print(f"[{now_ist}] Capturing baseline LATE (after 09:22 IST). Still valid as today's reference.")
+        print(f"[{now_ist}] Capturing baseline LATE (after 09:23 IST). Still valid as today's reference.")
 
     store_baseline_snapshot(trading_date, expiry_str, now_ist, strikes_dict)
 
@@ -903,7 +903,7 @@ def main_loop():
             # Send market close summary once at 3:33 PM on days when we were actively monitoring
             today_str = now_ist.date().isoformat()
             if (
-                now_ist.time() >= dtime(15, 33)
+                now_ist.time() >= dtime(15, 8)
                 and _close_message_sent_date != today_str
                 and any_baseline_today(today_str)
             ):
