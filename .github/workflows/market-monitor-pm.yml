@@ -1,10 +1,7 @@
 name: NIFTY OI Monitor - PM Session
 
 on:
-  schedule:
-    # 12:50 PM IST = 7:20 UTC, Mon-Fri
-    - cron: "20 7 * * 1-5"
-  workflow_dispatch:  # Allow manual runs for testing
+  workflow_dispatch:  # Triggered by cron-job.org at 12:50 PM IST; also allows manual runs
 
 jobs:
   monitor-pm:
